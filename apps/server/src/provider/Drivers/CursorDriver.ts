@@ -42,8 +42,8 @@ import type { ServerProviderDraft } from "../providerSnapshot.ts";
 import { mergeProviderInstanceEnvironment } from "../ProviderInstanceEnvironment.ts";
 import {
   makeProviderMaintenanceCapabilities,
+  makeProviderMaintenanceCapabilitiesSource,
   type ProviderMaintenanceCapabilitiesResolver,
-  resolveProviderMaintenanceCapabilitiesEffect,
 } from "../providerMaintenance.ts";
 import {
   haveProviderSnapshotSettingsChanged,
@@ -120,7 +120,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         continuationGroupKey: continuationIdentity.continuationKey,
       });
       const effectiveConfig = { ...config, enabled } satisfies CursorSettings;
-      const maintenanceCapabilities = yield* resolveProviderMaintenanceCapabilitiesEffect(UPDATE, {
+      const maintenanceCapabilities = yield* makeProviderMaintenanceCapabilitiesSource(UPDATE, {
         binaryPath: effectiveConfig.binaryPath,
         env: processEnv,
       });
@@ -142,7 +142,7 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
 
       const snapshotSettings = makeProviderSnapshotSettingsSource(effectiveConfig, serverSettings);
       const snapshot = yield* makeManagedServerProvider<ProviderSnapshotSettings<CursorSettings>>({
-        maintenanceCapabilities,
+        maintenanceCapabilities: maintenanceCapabilities.get,
         getSettings: snapshotSettings.getSettings,
         streamSettings: snapshotSettings.streamSettings,
         haveSettingsChanged: haveProviderSnapshotSettingsChanged,
@@ -152,15 +152,19 @@ export const CursorDriver: ProviderDriver<CursorSettings, CursorDriverEnv> = {
         // Model catalog and capabilities come exclusively from Cursor's
         // list_available_models extension method during provider checks.
         enrichSnapshot: ({ settings, snapshot: currentSnapshot, publishSnapshot }) =>
-          enrichCursorSnapshot({
-            settings: settings.provider,
-            snapshot: currentSnapshot,
-            maintenanceCapabilities,
-            enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
-            publishSnapshot,
-            stampIdentity,
-            httpClient,
-          }),
+          maintenanceCapabilities.refresh.pipe(
+            Effect.flatMap(() =>
+              enrichCursorSnapshot({
+                settings: settings.provider,
+                snapshot: currentSnapshot,
+                maintenanceCapabilities: maintenanceCapabilities.get(),
+                enableProviderUpdateChecks: settings.enableProviderUpdateChecks,
+                publishSnapshot,
+                stampIdentity,
+                httpClient,
+              }),
+            ),
+          ),
         refreshInterval: SNAPSHOT_REFRESH_INTERVAL,
       }).pipe(
         Effect.mapError(
