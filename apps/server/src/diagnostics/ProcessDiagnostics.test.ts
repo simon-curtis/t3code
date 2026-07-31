@@ -1,10 +1,14 @@
 import { describe, expect, it } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
+import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
+import * as Ref from "effect/Ref";
 import * as Sink from "effect/Sink";
 import * as Stream from "effect/Stream";
+import * as TestClock from "effect/testing/TestClock";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
 
@@ -208,6 +212,7 @@ describe("ProcessDiagnostics", () => {
       const diagnostics = yield* Effect.service(ProcessDiagnostics.ProcessDiagnostics).pipe(
         Effect.flatMap((pd) => pd.read),
         Effect.provide(layer),
+        Effect.provideService(HostProcessPlatform, "linux"),
       );
 
       expect(diagnostics.processes.map((process) => process.pid)).toEqual([4242]);
@@ -255,6 +260,90 @@ describe("ProcessDiagnostics", () => {
       expect(error.message).toBe(
         `Process diagnostics query 'ps' failed with exit code 17 in '${process.cwd()}'.`,
       );
+    }),
+  );
+
+  it.effect("joins Windows process and performance data with two bulk WMI queries", () =>
+    Effect.gen(function* () {
+      let powershellCommand = "";
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make((command) => {
+          const childProcess = command as unknown as {
+            readonly args: ReadonlyArray<string>;
+          };
+          powershellCommand = childProcess.args[3] ?? "";
+          return Effect.succeed(
+            mockHandle({
+              stdout: JSON.stringify({
+                ProcessId: 4242,
+                ParentProcessId: 100,
+                Name: "agent.exe",
+                CommandLine: "agent.exe serve",
+                Status: null,
+                WorkingSetSize: 2048,
+                PercentProcessorTime: 12,
+              }),
+            }),
+          );
+        }),
+      );
+
+      const rows = yield* ProcessDiagnostics.readProcessRows.pipe(
+        Effect.provide(spawnerLayer),
+        Effect.provideService(HostProcessPlatform, "win32"),
+      );
+
+      expect(rows).toMatchObject([
+        {
+          pid: 4242,
+          ppid: 100,
+          cpuPercent: 12,
+          rssBytes: 2048,
+          command: "agent.exe serve",
+        },
+      ]);
+      expect(powershellCommand).toContain("$perfById");
+      expect(powershellCommand).not.toContain("-Filter");
+      expect(powershellCommand.match(/Get-CimInstance/g)).toHaveLength(2);
+    }),
+  );
+
+  it.effect("kills a process query when its timeout expires", () =>
+    Effect.gen(function* () {
+      const killCalls = yield* Ref.make(0);
+      const exitCode = yield* Deferred.make<ChildProcessSpawner.ExitCode>();
+      const spawnerLayer = Layer.succeed(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            ChildProcessSpawner.makeHandle({
+              pid: ChildProcessSpawner.ProcessId(1),
+              exitCode: Deferred.await(exitCode),
+              isRunning: Effect.succeed(true),
+              kill: () => Ref.update(killCalls, (count) => count + 1),
+              unref: Effect.succeed(Effect.void),
+              stdin: Sink.drain,
+              stdout: Stream.empty,
+              stderr: Stream.empty,
+              all: Stream.empty,
+              getInputFd: () => Sink.drain,
+              getOutputFd: () => Stream.empty,
+            }),
+          ),
+        ),
+      );
+
+      const fiber = yield* ProcessDiagnostics.readProcessRows.pipe(
+        Effect.provide(spawnerLayer),
+        Effect.provideService(HostProcessPlatform, "linux"),
+        Effect.forkChild,
+      );
+      yield* TestClock.adjust("5 seconds");
+      const error = yield* Fiber.join(fiber).pipe(Effect.flip);
+
+      expect(error._tag).toBe("ProcessDiagnosticsQueryTimeoutError");
+      expect(yield* Ref.get(killCalls)).toBe(1);
     }),
   );
 

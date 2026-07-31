@@ -304,7 +304,7 @@ export const make = Effect.gen(function* () {
     }),
   );
 
-  yield* Effect.forever(sampleOnce.pipe(Effect.andThen(Effect.sleep(SAMPLE_INTERVAL_MS)))).pipe(
+  yield* Effect.forever(Effect.sleep(SAMPLE_INTERVAL_MS).pipe(Effect.andThen(sampleOnce))).pipe(
     Effect.forkScoped,
   );
 

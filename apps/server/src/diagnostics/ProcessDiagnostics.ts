@@ -28,7 +28,7 @@ export interface ProcessRow {
   readonly command: string;
 }
 
-const PROCESS_QUERY_TIMEOUT_MS = 1_000;
+const PROCESS_QUERY_TIMEOUT_MS = 5_000;
 const POSIX_PROCESS_QUERY_COMMAND = "pid=,ppid=,pgid=,stat=,pcpu=,rss=,etime=,command=";
 const PROCESS_QUERY_MAX_OUTPUT_BYTES = 2 * 1024 * 1024;
 
@@ -367,7 +367,7 @@ const runProcess = Effect.fn("runProcess")(function* (input: {
         child.exitCode,
       ],
       { concurrency: "unbounded" },
-    );
+    ).pipe(Effect.onInterrupt(() => child.kill({ killSignal: "SIGKILL" }).pipe(Effect.ignore)));
 
     return {
       cwd,
@@ -443,11 +443,13 @@ function readWindowsProcessRows(): Effect.Effect<
   ChildProcessSpawner.ChildProcessSpawner
 > {
   const command = [
-    "$processes = Get-CimInstance Win32_Process | ForEach-Object {",
-    '$perf = Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess = $($_.ProcessId)" -ErrorAction SilentlyContinue;',
+    "$processes = Get-CimInstance Win32_Process;",
+    "$perfById = @{};",
+    "Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -ErrorAction SilentlyContinue | ForEach-Object { $perfById[[int]$_.IDProcess] = $_ };",
+    "$processes | ForEach-Object {",
+    "$perf = $perfById[[int]$_.ProcessId];",
     "[pscustomobject]@{ ProcessId = $_.ProcessId; ParentProcessId = $_.ParentProcessId; Name = $_.Name; CommandLine = $_.CommandLine; Status = $_.Status; WorkingSetSize = $_.WorkingSetSize; PercentProcessorTime = if ($perf) { $perf.PercentProcessorTime } else { 0 } }",
-    "};",
-    "$processes | ConvertTo-Json -Compress -Depth 3",
+    "} | ConvertTo-Json -Compress -Depth 3",
   ].join(" ");
 
   return runProcess({
