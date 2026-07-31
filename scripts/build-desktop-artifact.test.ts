@@ -222,22 +222,24 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
         libc: ["glibc"],
       },
     });
-    // Windows artifacts also bundle the same-architecture WSL (Linux, glibc) backend, so the
-    // staged install must fetch its native optional deps (e.g. ffi-rs) too.
+    // A Windows artifact without a supplied WSL runtime only installs Windows optional deps.
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "win", arch: "x64" }), {
       supportedArchitectures: {
-        os: ["win32", "linux"],
+        os: ["win32"],
         cpu: ["x64"],
-        libc: ["glibc"],
       },
     });
-    assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "win", arch: "arm64" }), {
-      supportedArchitectures: {
-        os: ["win32", "linux"],
-        cpu: ["arm64"],
-        libc: ["glibc"],
+    // Supplying the WSL runtime opts into Linux/glibc native dependencies too.
+    assert.deepStrictEqual(
+      createStageWorkspaceConfig({ platform: "win", arch: "x64", includeWslRuntime: true }),
+      {
+        supportedArchitectures: {
+          os: ["win32", "linux"],
+          cpu: ["x64"],
+          libc: ["glibc"],
+        },
       },
-    });
+    );
     assert.deepStrictEqual(createStageWorkspaceConfig({ platform: "mac", arch: "universal" }), {
       supportedArchitectures: {
         os: ["darwin"],
@@ -495,6 +497,23 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       assert.equal(win.icon, "icon.ico");
       assert.equal(win.signAndEditExecutable, true);
       assert.notProperty(win, "azureSignOptions");
+      assert.deepStrictEqual(config.asarUnpack, DESKTOP_ASAR_UNPACK);
+
+      const wslConfig = yield* createBuildConfig(
+        "win",
+        "nsis",
+        "1.2.3",
+        false,
+        false,
+        undefined,
+        undefined,
+        true,
+      );
+      assert.deepStrictEqual(wslConfig.asarUnpack, [
+        ...DESKTOP_ASAR_UNPACK,
+        "apps/server/dist/**",
+        "**/node_modules/**",
+      ]);
     }).pipe(Effect.provide(ConfigProvider.layer(ConfigProvider.fromEnv({ env: {} })))),
   );
 
