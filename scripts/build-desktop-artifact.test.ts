@@ -494,9 +494,11 @@ it.layer(NodeServices.layer)("build-desktop-artifact", (it) => {
       );
 
       const win = config.win as Record<string, unknown>;
+      const nsis = config.nsis as Record<string, unknown>;
       assert.equal(win.icon, "icon.ico");
       assert.equal(win.signAndEditExecutable, true);
       assert.notProperty(win, "azureSignOptions");
+      assert.equal(nsis.include, "apps/desktop/resources/installer.nsh");
       assert.deepStrictEqual(config.asarUnpack, DESKTOP_ASAR_UNPACK);
 
       const wslConfig = yield* createBuildConfig(
